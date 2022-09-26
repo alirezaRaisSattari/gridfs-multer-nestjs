@@ -1,29 +1,53 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import { Controller, Get, Header, HttpException, HttpStatus, Injectable, Param, Post, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { Connection, isValidObjectId, Model } from 'mongoose';
+import { Cat, CatDocument } from './schemas/cat.schema';
+import { mongo } from "mongoose"
+import { FileInterceptor } from '@nestjs/platform-express';
+import { MongoGridFS } from 'mongo-gridfs'
+import { GridFSBucket } from 'mongodb';
+import * as fs from 'fs';
 import { CatsService } from './cats.service';
-import { CreateCatDto } from './dto/create-cat.dto';
-import { Cat } from './schemas/cat.schema';
 
 @Controller('cats')
 export class CatsController {
-  constructor(private readonly catsService: CatsService) {}
+
+  private fileModel: MongoGridFS;
+  private bucket;
+  constructor(
+    @InjectModel(Cat.name) private readonly catModel: Model<CatDocument>,
+    @InjectConnection() private readonly connection,
+    private filesService: CatsService
+  ) {
+    this.fileModel = new MongoGridFS(this.connection.db, 'fs');
+    this.bucket = new mongo.GridFSBucket(connection.db, { bucketName: 'fs' })
+  }
 
   @Post()
-  async create(@Body() createCatDto: CreateCatDto) {
-    await this.catsService.create(createCatDto);
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFile(
+    @UploadedFile() file,
+  ) {
+    console.log(file);
   }
 
-  @Get()
-  async findAll(): Promise<Cat[]> {
-    return this.catsService.findAll();
+  async fileDown(id) {
+    await this.fileModel.readFileStream(id)
+    const downloadStream = this.bucket.openDownloadStream(id)
+    return new Promise(resolve => {
+      resolve(downloadStream)
+    });
   }
 
-  @Get(':id')
-  async findOne(@Param('id') id: string): Promise<Cat> {
-    return this.catsService.findOne(id);
-  }
-
-  @Delete(':id')
-  async delete(@Param('id') id: string) {
-    return this.catsService.delete(id);
+  @Get("download/:id")
+  async downloadFile(@Param('id') id: string, @Res() res) {
+    const file = await this.filesService.findInfo(id)
+    const filestream = await this.filesService.readStream(id)
+    if (!filestream) {
+      throw new HttpException('An error occurred while retrieving file', HttpStatus.EXPECTATION_FAILED)
+    }
+    res.header('Content-Type', file.contentType);
+    res.header('Content-Disposition', 'attachment; filename=' + file.filename);
+    return filestream.pipe(res)
   }
 }

@@ -1,32 +1,35 @@
-import { Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { CreateCatDto } from './dto/create-cat.dto';
-import { Cat, CatDocument } from './schemas/cat.schema';
-
+import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
+import { InjectConnection } from '@nestjs/mongoose'
+import { Connection } from 'mongoose'
+import { MongoGridFS } from 'mongo-gridfs'
+import { GridFSBucketReadStream } from 'mongodb'
+// import { FileInfoVm } from './view-models/file-info-vm.model'
+import { response } from 'express';
 @Injectable()
 export class CatsService {
-  constructor(
-    @InjectModel(Cat.name) private readonly catModel: Model<CatDocument>,
-  ) {}
-
-  async create(createCatDto: CreateCatDto): Promise<Cat> {
-    const createdCat = await this.catModel.create(createCatDto);
-    return createdCat;
+  private fileModel: MongoGridFS;
+  constructor(@InjectConnection() private readonly connection) {
+    this.fileModel = new MongoGridFS(this.connection.db, 'fs');
   }
 
-  async findAll(): Promise<Cat[]> {
-    return this.catModel.find().exec();
+  async readStream(id: string): Promise<GridFSBucketReadStream> {
+    return await this.fileModel.readFileStream(id);
   }
 
-  async findOne(id: string): Promise<Cat> {
-    return this.catModel.findOne({ _id: id }).exec();
+  async findInfo(id: string) {
+    const result = await this.fileModel
+      .findById(id).catch(err => { throw new HttpException('File not found', HttpStatus.NOT_FOUND) })
+      .then(result => result)
+    return {
+      filename: result.filename,
+      length: result.length,
+      chunkSize: result.chunkSize,
+      md5: result.md5,
+      contentType: result.contentType
+    }
   }
 
-  async delete(id: string) {
-    const deletedCat = await this.catModel
-      .findByIdAndRemove({ _id: id })
-      .exec();
-    return deletedCat;
+  async deleteFile(id: string): Promise<boolean> {
+    return await this.fileModel.delete(id)
   }
 }
